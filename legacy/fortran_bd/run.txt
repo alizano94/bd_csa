@@ -1,0 +1,82 @@
+Number of particles ---> np                                                                                          
+300
+Total number of steps ---> nstep                                                                                        
+1000000
+Interval for writing out data ---> iprint                                                                                   
+1000000                                                                                                              
+Number of initial steps to be ignored ---> istart                                                                          
+0                                                                                                           
+Filename for initial particle configurations ---> par_in                                                                  
+start.txt
+File name for output particle coordinates ---> par_out                                                           
+bd_xyz                                                                                                             
+Radius of the particle (nm) ---> a                                                             
+1435.0                                                                                                             
+Temperature (C) ---> tempr                                                                                 
+20                                                                                                                 
+Particle area fraction in terms of core radius(phi) ---> phi                                                                
+0.001                                                                                                              
+Time step for integration (ms) ---> dt                                                       
+0.1                                                                                                                
+Initial starting time (ms) ---> t                                                                             
+0                                                                                                                  
+Tag: 'n' for new coordinate file, 'o' for continuing file ---> check                                                         
+'n'                                                                                                                
+Fac1 ---> fac1                                               
+5.9582E+07  4.0809E+04                                                                                             
+Fac2 ---> fac2                                                                                                     
+40.5622  18.3254                                                                                                   
+Paralell Diffusion Factor ---> pwfactor                                                                                         
+0.4079                                                                                                             
+Gravitational Force (G*a/kT) ---> Fgrav                                                                            
+43.5488                                                                                                            
+Enter cutoff for electric repulsion force calculation (radii) ---> rcut                                                      
+5.0                                                                                                                
+enter cutoff for dipole dipole calculation ---> re                                            
+5.0                                                                                                                
+kappa * a ---> kappa                                                                 
+143.5                                                                                                         
+bpp/kT/a ---> pfpp                                                                                                
+2.2975                                                                                                            
+bpw/kT ---> pfpw                                                                                                 
+6628.1036                                                                                                          
+lambda ---> lambda                                                                                                   
+0.8744
+Clausius-Mossotti (fcm) ---> fcm                                                                                            
+-0.4667                                                                                                     
+Gap width (dg/a)  (dg is 91um) ---> dg                                                                                  
+63.415                                                                                                             
+Levitation height (h/a) ---> hlev                                                                             
+0.0663                                                                                                             
+Minimum coordination radius for conn6 (nm) ---> rmin                                                                        
+3780                                                                                                               
+Experimental Box Size (x/a, y/a) ---> expbox(1), expbox(2)                                                               
+63.415 63.415 66 66 53.95556 41.10899                                                                              
+Experimental Noise (nm) ---> var                                                          
+0                                                                                                                  
+Polydisperse or monodisperse system (mono, poly) ---> polymono                                                                  
+mono                                                                                                               
+Particle size distribution file ---> pdfile                                                                                    
+raddist.txt                                                                                                        
+Dummy variable ---> idummy                                                                        
+1
+RG histogram filename, width of Rg bins(nm), minimum of Rg(nm) ---> RGHISTFILE, DELRG, RGMIN                                                  
+bd_rghist.txt 50 2000                                                                                              
+filename of the psi histogram and width of the psi bins ---> PSIHISTFILE, DELPSI                                                      
+bd_psihist.txt 0.05                                                                                                
+con6 histogram filename and width of the bin ---> conhistfile, delcon                                                 
+bd_conhist.txt 0.2                                                                                                 
+cyclenum ---> cyclenum                                                                                                          
+1                                                                                                               
+rgdsfile ---> rgdsfile                                                                                             
+2dtabledssnp300.txt                                                                                            
+rgdsmin, delrgdsmin, rgdssbin ---> rgdsmin,delrgdsmin, rgdssbin                                                                            
+26500 -250 30                                                                                                      
+distmin, deldist, bin ---> distmin,deldist,distdssbin                                                                                       
+0 1435 50                                                                                                          
+dssmin  dssmax ---> dssmin, dssmax                                                              
+0.10  0.4                                                                                                          
+dpf ---> dpf                                                                                 
+1                                                                                                                  
+ecorrect flag ---> ecorrectflag                                                                                               
+1                                                                                                                                                                                                                             

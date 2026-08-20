@@ -1,0 +1,23 @@
+add_executable(test_constants test_constants.cpp)
+target_link_libraries(test_constants PRIVATE bd_csa_core)
+target_include_directories(test_constants PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME tier1_constants COMMAND test_constants)
+
+add_executable(test_forces test_forces.cpp)
+target_link_libraries(test_forces PRIVATE bd_csa_core)
+target_include_directories(test_forces PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME tier2_forces COMMAND test_forces)
+set_tests_properties(tier2_forces PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(test_integrator test_integrator.cpp)
+target_link_libraries(test_integrator PRIVATE bd_csa_core)
+target_include_directories(test_integrator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME integrator COMMAND test_integrator)
+
+if(BD_CSA_ENABLE_CUDA)
+  add_executable(test_cuda test_cuda.cpp)
+  target_link_libraries(test_cuda PRIVATE bd_csa_cuda)
+  target_include_directories(test_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME tier4_cuda COMMAND test_cuda)
+  set_tests_properties(tier4_cuda PROPERTIES SKIP_RETURN_CODE 77)
+endif()
