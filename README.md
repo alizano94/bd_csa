@@ -4,14 +4,19 @@ A batched, GPU-accelerated rewrite of a legacy Fortran 77 Brownian-dynamics
 simulator for **directed colloidal self-assembly in a quadrupole electrode cell**,
 exposed to Python as a vectorized reinforcement-learning environment.
 
-> **Status: working.** CPU reference and CUDA backend both implemented and
-> validated against the legacy Fortran. **331× the Fortran's throughput** at 4096
-> batched environments, and 9× on a single one. See [DEVLOG.md](DEVLOG.md) for
-> the full engineering record and [data/GOLDEN.md](data/GOLDEN.md) for measured
-> reference values.
+> **Status: the simulator is finished and validated; the Python packaging is the
+> only substantive gap.** CPU reference and CUDA backend both implemented and
+> checked against the legacy Fortran — pair forces to round-off, and observable
+> distributions statistically indistinguishable over 20-seed ensembles. **331× the
+> Fortran's throughput** at 4096 batched environments, 9× on a single one.
 >
-> Remaining: Python bindings are written but not yet built (they need one
-> approved network fetch — see [DEVLOG.md](DEVLOG.md) Phase M4).
+> Remaining: the Python bindings are written but have never been compiled (they
+> need pybind11, one network fetch at configure time), and the CUDA kernel takes
+> one `λ` per launch — which blocks per-environment RL actions on GPU.
+>
+> [documentation/11-validation-and-status.md](documentation/11-validation-and-status.md)
+> is the current, audited assessment; [DEVLOG.md](DEVLOG.md) is the engineering
+> record; [data/GOLDEN.md](data/GOLDEN.md) holds the regression targets.
 
 ## Quick start
 
@@ -24,8 +29,9 @@ ctest --test-dir build/cmake            # 4 validation suites
 # Build the Fortran oracle used by the differential tests
 tests/oracle/build_force_oracle.sh
 
-# Run the drop-in CLI (same argv as the legacy bdpd)
-cd build/cli_test && ../cmake/bdpd 30.0 -7
+# Run the drop-in CLI (same argv as the legacy bdpd; reads run.txt from the CWD)
+mkdir -p run1 && cd run1 && cp ../data/{run.txt,start.txt,2dtabledssnp300.txt} .
+../build/cmake/bdpd 30.0 -7 && cd ..
 
 # Throughput sweep against the Fortran baseline
 ./build/cmake/bench_cuda 5000
@@ -36,18 +42,28 @@ python3 tests/compare_trajectories.py 20 50000
 
 ## Measured results
 
+Linux / x86-64, RTX 4060 Ti, g++ 13.3 (development machine):
+
 | | µs/env-step | vs Fortran |
 |---|---|---|
-| Fortran (baseline, this machine) | 311.5 | 1× |
+| Fortran (baseline) | 311.5 | 1× |
 | CPU port, single env | 237 | 1.31× |
 | CUDA, 1 env | 34.7 | 9.0× |
 | CUDA, 64 envs | 1.01 | 310× |
 | CUDA, 4096 envs | **0.94** | **331×** |
 
-Accuracy: pair forces reproduce the Fortran to **1.1e-14** (round-off); the FP32
-GPU force kernel sits at max 9.1e-5 / RMS 9.7e-6 against the FP64 reference. Over
-20-seed ensembles the port's ψ₆/C₆/R_g distributions are statistically
-indistinguishable from the Fortran's when run in legacy-physics mode (KS p ≥ 0.50).
+Independently re-measured on macOS / arm64, AppleClang 21 (no GPU):
+
+| | µs/step | vs Fortran |
+|---|---|---|
+| Fortran (baseline) | 284 | 1× |
+| CPU port | 238 | 1.19× |
+
+Accuracy: pair forces reproduce the Fortran to **1.1e-14** on Linux/g++ and
+**6.9e-14** on macOS/AppleClang — round-off on both. The FP32 GPU force kernel
+sits at max 9.1e-5 / RMS 9.7e-6 against the FP64 reference. Over 20-seed ensembles
+the port's ψ₆/C₆/R_g distributions are statistically indistinguishable from the
+Fortran's when run in legacy-physics mode (KS p ≥ 0.50).
 
 > **Read this before training a policy.** The default (corrected) physics shifts
 > ψ₆ by **−8%** relative to the legacy simulator — see
@@ -77,7 +93,7 @@ text files:
 |---|---|---|
 | One env step (10⁶ integration steps = 100 s simulated) | ≈ 4.7 min, one core | batched on GPU |
 | Parallel environments | 1 | thousands (`[n_env][np]`) |
-| Interface | process spawn + `run.txt` / `start.txt` / `out_param.json` | in-process, zero-copy DLPack |
+| Interface | process spawn + `run.txt` / `start.txt` / `out_param.json` | in-process, numpy arrays |
 | Global state | 15 COMMON blocks | `Config` (immutable) + `State` (per-env) |
 
 A 100-step episode currently takes ~8 hours, and modern RL wants 10⁴–10⁶ env
@@ -85,24 +101,27 @@ steps. The bottleneck is not that a 300-particle BD step is slow — it is that 
 environment cannot be batched. See
 [documentation/06-rl-integration.md](documentation/06-rl-integration.md) §6.3.
 
-## Target API
+## API
 
 ```python
 import bd_csa
 
-sim = bd_csa.Simulator(
-    config = bd_csa.Config.from_toml("configs/quadrupole_300.toml"),
-    n_envs = 4096,
-    device = "cuda",
-)
+cfg = bd_csa.Config.from_run_txt("data/run.txt")
+x0  = bd_csa.read_start_txt("data/start.txt", cfg)   # (300, 2) in nm
 
-sim.reset(positions=x0, seeds=seeds)     # (n_envs, np, 2)
-obs = sim.step(lam, n_steps=1_000_000)   # lam: (n_envs,) -> obs: (n_envs, 2) = [ψ₆, C₆/6]
-pos = sim.positions()                    # zero-copy, __cuda_array_interface__ / DLPack
+sim = bd_csa.Simulator(cfg, "data/2dtabledssnp300.txt", n_envs=4096, device="cuda")
+sim.reset(x0)                            # (np,2) broadcasts, or pass (n_envs,np,2)
+sim.step(30.0, n_steps=1_000_000, seed=7)
+obs = sim.observations()                 # (n_envs, 2) = [ψ₆, C₆/6]
+pos = sim.positions()                    # (n_envs, np, 2) float64 nm, a copy
 ```
 
-The Gym/Gymnasium adapter (`BDVectorEnv`) sits *on top* of this, not underneath —
-the simulator core does not know about Gym.
+A step is a pure function of `(positions, seed, λ)` — no hidden state — which is
+what makes batching sound. The Gymnasium adapter (`BDVectorEnv`) sits *on top* of
+this, never underneath: the simulator core does not know about Gym.
+
+Full reference: [09-api-reference.md](documentation/09-api-reference.md).
+Recipes: [10-usage-guide.md](documentation/10-usage-guide.md).
 
 ## Documentation
 
@@ -111,6 +130,8 @@ this rewrite. It was reverse-engineered from the legacy source and **verified by
 running it** (rebuild, timing, reproduction of `R_g`/`RC` from dumped coordinates,
 reproduction of the RNG seeding defect).
 
+**The specification** — reverse-engineered from the legacy Fortran:
+
 | Document | Contents |
 |---|---|
 | [01-physical-model.md](documentation/01-physical-model.md) | Geometry, field, every force term, full derivations |
@@ -118,52 +139,63 @@ reproduction of the RNG seeding defect).
 | [03-order-parameters.md](documentation/03-order-parameters.md) | `ψ₆`, `C₆`, `R_g`, `RC` — definitions and exact algorithms |
 | [04-code-reference.md](documentation/04-code-reference.md) | File-by-file, routine-by-routine, COMMON-block reference |
 | [05-io-formats.md](documentation/05-io-formats.md) | CLI, `run.txt`, `start.txt`, `bd_xyz1.txt`, `out_param.json`, mobility table |
-| [06-rl-integration.md](documentation/06-rl-integration.md) | How `bd_env.py` drives the binary — the contract to preserve |
-| [07-porting-notes.md](documentation/07-porting-notes.md) | Bugs, quirks, dead code, numerical-fidelity traps, CUDA and pybind11 plan |
+| [06-rl-integration.md](documentation/06-rl-integration.md) | How `bd_env.py` drove the binary — the contract preserved |
+| [07-porting-notes.md](documentation/07-porting-notes.md) | Bugs, quirks, dead code, numerical-fidelity traps |
 
-**Read [07-porting-notes.md](documentation/07-porting-notes.md) before writing any
-code.** It documents a real RNG seeding bug, a missing `∇·D` drift term, a
-single-precision centroid, half-implemented periodic boundaries, and ~40 % dead
-code that should not be ported.
+**The implementation** — what this repository contains:
 
-## Planned layout
+| Document | Contents |
+|---|---|
+| [08-implementation-map.md](documentation/08-implementation-map.md) | Architecture, file-by-file, the CUDA design, where each legacy behaviour ended up |
+| [09-api-reference.md](documentation/09-api-reference.md) | Python API, C++ API, the `bdpd` CLI, `bench_cuda` |
+| [10-usage-guide.md](documentation/10-usage-guide.md) | Build, test, run, use from Python and from RL; troubleshooting |
+| [11-validation-and-status.md](documentation/11-validation-and-status.md) | What is proven and on which machine, open defects, what is left |
+
+**Read [07-porting-notes.md](documentation/07-porting-notes.md) before changing the
+physics** — it documents the RNG seeding bug, the missing `∇·D` drift term, the
+single-precision centroid, the half-implemented periodic boundaries and the ~40 %
+dead code, all of which the port decided about deliberately
+([08-implementation-map.md](documentation/08-implementation-map.md) §8.6).
+
+## Layout
 
 ```
 bd_csa/
-├── documentation/          reverse-engineered spec (this is what exists today)
-├── include/bd_csa/         public C++ headers — Config, State, Simulator
-├── src/                    CPU reference implementation (C++20, double precision)
-├── cuda/                   batched force / noise / order-parameter kernels
-├── python/bd_csa/          pybind11 module + BDVectorEnv Gym adapter
-├── tests/                  regression harness (golden inputs, force comparisons)
-├── configs/                TOML configs, with a from_run_txt() shim
-└── data/                   golden inputs: start.txt, run.txt, 2dtabledssnp300.txt
+├── documentation/          spec (01-07) + implementation docs (08-11)
+├── include/bd_csa/         public C++ headers — Config, State, Simulator, Philox
+├── src/                    CPU reference implementation (C++20, FP64)
+├── cuda/                   batched persistent kernel, one block per environment
+├── apps/                   bdpd CLI drop-in, bench_cuda throughput sweep
+├── python/                 pybind11 bindings + BDVectorEnv Gym adapter
+├── tests/                  4 ctest suites + the Fortran oracle builder
+├── data/                   golden inputs + GOLDEN.md regression targets
+└── legacy/fortran_bd/      vendored Fortran, read-only, byte-identical to upstream
 ```
 
-Build: CMake + CUDA, Python packaging via scikit-build-core + pybind11.
+Build: CMake (+ CUDA when available), pybind11 fetched at configure time.
+See [10-usage-guide.md](documentation/10-usage-guide.md) §10.1.
 
-## Roadmap
+## Status and what is left
 
-Sequenced per [07-porting-notes.md](documentation/07-porting-notes.md) §7.12:
+The port is complete through the CUDA backend and its validation. The remaining
+work, in priority order (details in
+[11-validation-and-status.md](documentation/11-validation-and-status.md) §11.5):
 
-1. **Regression harness first.** Freeze the shipped `start.txt`, `run.txt`, and
-   `2dtabledssnp300.txt` as golden inputs. Assert `fac1`/`fac2` derivation
-   (`0.011709`, `5.797`), `R_g = 21014.5 nm`, `RC = 0.76125`, and single-step
-   forces matching Fortran to ~1e-12 with noise disabled.
-2. **CPU C++ reference.** Structs instead of COMMON blocks, double precision
-   throughout, counter-based RNG, duplicated output block merged. Target:
-   reproduce the Fortran `ψ₆`/`C₆`/`R_g` trajectories *statistically* (ensemble
-   means over ~20 seeds) — bit-exact is off the table once the RNG changes.
-3. **Force-kernel validation.** Check the analytic dipole force against a central
-   difference of the potential; the asymmetric `i`/`j` gradient terms are the
-   easiest thing here to get subtly wrong.
-4. **CUDA kernels.** Batched N-body forces `[n_env][np]`, fused DEP, Philox noise,
-   fused position update; order parameters as a separate kernel on output steps.
-5. **pybind11 bindings.** Zero-copy interop, `Config` from TOML, `BDVectorEnv` last.
-6. **Physics options, explicitly flagged.** `mobility_update_interval`, the `∇·D`
-   drift term, periodicity, and a continuous overlap force each change results —
-   expose them as config with the legacy behaviour as the default, so previously
-   trained policies stay reproducible.
+1. **Build the Python module.** It is the only thing between the current state
+   and usable RL. Needs pybind11 — one network fetch at configure time, or a
+   system `pybind11-dev`. The code and CMake wiring are complete; nobody has
+   compiled it yet, so the Python API is unexercised.
+2. **Per-environment `λ` on the GPU.** The kernel takes one `λ` per launch, so a
+   per-env action array *raises* on `device="cuda"`. Every RL algorithm needs
+   this. Small kernel change: move `λ` into a per-block array argument.
+3. **Three small defects** found in the 2026-08-20 audit: a 1-ulp RNG equality
+   assertion that fails on AppleClang, a BSD-awk incompatibility in the oracle
+   build script, and `PhysicsOptions::continuous_overlap` not being wired to
+   anything.
+4. **Order parameters on device**, to avoid a full position download per action.
+5. **The remaining performance gap** — 331× against a ~500× projection. Measure
+   with `ncu`; this project's two guesses were both wrong.
+6. **The collective `∇·D` term** — only the local radial gradient is included.
 
 ## Legacy source
 
@@ -177,7 +209,8 @@ cd legacy/fortran_bd && make          # gfortran -O -> ./bdpd
 ./bdpd <lambda> <seed>                # writes bd_xyz1.txt, op1.txt, out_param.json
 ```
 
-Treat it as read-only. The inputs and reference outputs in that directory are the
-golden data for the regression harness (roadmap step 1) — do not regenerate them
-in place. The upstream copy lives in the `SAC3` repository at
-`sac3/fortran_bd`.
+Treat it as read-only. The frozen copies in [`data/`](data/) are what the tests
+read — do not regenerate anything in place, and note that
+`tests/oracle/build_force_oracle.sh` builds its instrumented variants
+out-of-tree for exactly this reason. The upstream copy lives in the `SAC3`
+repository at `sac3/fortran_bd`.

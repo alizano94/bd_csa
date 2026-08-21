@@ -101,9 +101,10 @@ Computed **without** minimum-imaging (`conn6calc.f:116-140`), which is correct
 here because the cluster never straddles a boundary.
 
 `R_g` is not part of the RL state, but it **is** the row index into the mobility
-table (§2.4) and it feeds `RC`. Typical value for the shipped start
-configuration: **21,014.5 nm** ≈ 14.6 a. *(Reproduced exactly from the dumped
-coordinates while writing these docs.)*
+table (§2.4) and it feeds `RC`. Value for the shipped `start.txt`:
+**21,015.90986 nm** ≈ 14.65 a, reproduced to all five decimals from the raw
+coordinates. [data/GOLDEN.md](../data/GOLDEN.md) is the authoritative list of
+regression targets.
 
 Note `caldss.f` recomputes its own centroid in **single precision** (the variables
 `xmean`, `ymean`, `disttemp` are undeclared and default to `REAL*4`), while
@@ -138,9 +139,9 @@ The normalizer 5.6 (rather than 6) and the `R_g` bounds are empirical constants
 tuned for `np = 300`; **they will not transfer to other particle counts** and
 should become explicit configuration in the rewrite.
 
-*Worked check (from a real run):* `R_g = 21014.5`, `C₆ = 4.2667` →
-`Ra = 0.68793`, `Crc = 0.76191`, `Wrc = 0.008889`, `RC = 0.76125` — matching the
-program's printed `0.76125`.
+*Worked check, shipped `start.txt` at t = 0:* `R_g = 21015.90986`, `C₆ = 4.28` →
+`Ra = 0.687746`, `Crc = 0.764286`, `Wrc = 0.008517`, `RC = 0.763633` — matching
+the program's printed `0.76363`.
 
 ## 3.5 Summary
 

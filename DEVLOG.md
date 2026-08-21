@@ -5,11 +5,14 @@ cold: every number here was measured on this machine, and every wrong turn is
 kept in rather than tidied away, because the wrong turns are where the
 non-obvious constraints came from.
 
-**Machine:** RTX 4060 Ti (Ada, cc 8.9, 8 GB), CUDA 13.2 toolkit / 13.0 driver,
-g++ 13.3, gfortran 13.3, 16 cores.
+**Machine (M0–M4):** RTX 4060 Ti (Ada, cc 8.9, 8 GB), CUDA 13.2 toolkit / 13.0
+driver, g++ 13.3, gfortran 13.3, 16 cores.
+**Machine (M5 audit):** macOS 15 / arm64, AppleClang 21.0.0, gfortran 16.1.0,
+no GPU.
 
 **Approved plan:** `~/.claude/plans/hashed-snuggling-raccoon.md`
-**Spec:** `documentation/` (7 docs, reverse-engineered from the legacy program)
+**Spec:** `documentation/` 01–07, reverse-engineered from the legacy program
+**Implementation docs:** `documentation/` 08–11 (architecture, API, usage, status)
 **Golden data + measurements:** `data/GOLDEN.md`
 
 ---
@@ -413,6 +416,74 @@ imported its own `reward_function`.
 
 ---
 
+## Phase M5 — second-machine audit and implementation docs (2026-08-20)
+
+A different machine, OS, architecture and compiler than every measurement above:
+**macOS 15 / arm64, AppleClang 21.0.0, CMake 4.4.0, gfortran 16.1.0, no GPU.**
+The point was to find out which of M0–M4's results were properties of the code
+and which were properties of that one Linux box.
+
+### What held
+
+- Configure and build: clean, unmodified, `-DBD_CSA_BUILD_PYTHON=OFF`.
+- **tier2_forces passed at max rel err 6.916e-14** against a freshly built
+  Fortran oracle — the same round-off floor as the 1.118e-14 on Linux/g++, on a
+  different libm and a different FPU. The force algebra is genuinely
+  toolchain-independent, which is the strongest form the claim can take.
+- Every other tier-2 check passed: the non-Newtonian assertion (|ΣF| = 5.7e-5),
+  the legacy finite-difference comparison (3.39e-07), analytic vs central
+  difference (2.64e-09), and the FP32-cancellation assertion.
+- tier1_constants passed. The CLI reproduced the `data/GOLDEN.md` t=0 row
+  exactly: `4.28000  21015.90986  0.40508  0.76363`.
+- CPU speedup **1.19×** here (238 vs 284 µs/step, same session, 20k steps)
+  against 1.31× on Linux. Same order; the gap is compiler codegen, not a
+  regression.
+
+### Three defects the second machine exposed
+
+1. **The RNG bit-equality assertion fails on AppleClang at -O3** — the second
+   Box–Muller component differs by 1 ulp (5.55e-17) between two calls with an
+   identical key. Deterministic in the full test binary; does **not** reproduce
+   in an extracted minimal program, with or without `-ffp-contract=off`, with or
+   without vectorization. So it is a per-call-site codegen difference in the
+   sin/cos tail, not a logic error — every statistical and determinism check
+   passes.
+
+   The lesson is about the *claim*, not the code: `rng.hpp` says the RNG gives
+   "bitwise reproducibility", and that holds **within a build**, not across
+   compilers. The test encodes the stronger claim. Give it a few-ulp tolerance.
+
+2. **`tests/oracle/build_force_oracle.sh` does not run on macOS.** The awk
+   program writes single quotes as `\x27`; BSD awk parses `\x` escapes greedily,
+   so `\x27f` swallows the following `f` and emits
+   `open(77,file=orce_dump.txt')`. Substituting the portable octal `\047`
+   makes both oracle variants build and run — verified.
+
+3. **`PhysicsOptions::continuous_overlap` is wired to nothing.** It is declared,
+   set by `bdpd --legacy`, and exposed to Python, but no code reads it. The live
+   switch is `ForceOptions::legacy_overlap`, which only the tests and
+   `forces_once` ever set; the episode kernel hard-codes it to 0 and
+   `bdpd_main` never calls `set_force_options()`. No effect on results — the
+   contact branch is unreachable (min separation measured at 2.046a) — but
+   `--legacy` does not do what it advertises.
+
+### Documentation
+
+`documentation/` was 01–07, the legacy specification only. Added 08–11 covering
+the implementation: architecture and file-by-file map, the full C++/Python/CLI
+API reference, a usage guide, and the audited status. Root `README.md` updated —
+its "Target API" block described an API that was never built (`Config.from_toml`,
+zero-copy DLPack, `obs = sim.step(...)`), and its roadmap listed as future work
+things that are done.
+
+Also corrected a real trap: `documentation/` quoted `R_g = 21014.5`, `C₆ = 4.2667`,
+`RC = 0.76125` as the golden values. Those came from the *final* configuration of
+a short throwaway run, not from `start.txt`. Recomputed from `start.txt` directly:
+`R_g = 21015.90986`, matching `data/GOLDEN.md`. The docs now defer to GOLDEN.md
+rather than restating numbers.
+
+---
+
 ## Where things stand
 
 | | status |
@@ -423,6 +494,8 @@ imported its own `reward_function`.
 | M3 Verlet lists, 331× throughput | done |
 | M3 tier-5 statistical validation | done — legacy mode matches the Fortran (p ≥ 0.50) |
 | M4 Python bindings | written; build blocked on a network fetch |
+| M5 second-machine audit (macOS/arm64, AppleClang) | done — tier-2 held at 6.9e-14; three small defects found |
+| Implementation docs (`documentation/` 08-11) | done |
 
 Test suite: 4 ctest suites, all passing
 (`tier1_constants`, `tier2_forces`, `integrator`, `tier4_cuda`).

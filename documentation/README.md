@@ -1,11 +1,18 @@
-# `fortran_bd` — Reference Documentation
+# bd_csa — Documentation
 
-Reverse-engineered documentation of the legacy Fortran 77 Brownian-dynamics (BD)
-simulator located at `SAC3/sac3/fortran_bd`, written as the specification for the
-planned C++/CUDA rewrite and Python binding.
+Two halves:
 
-**Source of truth:** `/Users/alizano/Documents/repos/SAC3/sac3/fortran_bd`
-(12 `.f` files, ~1,100 lines, built by `makefile` into the executable `bdpd`).
+* **01–07 — the specification.** Reverse-engineered documentation of the legacy
+  Fortran 77 simulator: the physics, the maths, the file formats, and every
+  defect that had to be decided about. This is what the rewrite implements.
+* **08–11 — the implementation.** What the C++/CUDA/Python code actually does,
+  how to use it, and where the project stands.
+
+The legacy source is vendored read-only at [`legacy/fortran_bd/`](../legacy/fortran_bd/)
+(12 `.f` files, ~1,100 lines), byte-identical to upstream `SAC3/sac3/fortran_bd`.
+For the engineering narrative — what was tried and what failed — see
+[DEVLOG.md](../DEVLOG.md). For regression targets see
+[data/GOLDEN.md](../data/GOLDEN.md).
 
 ## What the program simulates
 
@@ -26,6 +33,8 @@ annealed out of a disordered fluid. The program is driven episode-by-episode fro
 
 ## Document index
 
+### The specification (legacy Fortran)
+
 | File | Contents |
 |---|---|
 | [01-physical-model.md](01-physical-model.md) | The physics: geometry, field, every force term, full derivations |
@@ -33,8 +42,20 @@ annealed out of a disordered fluid. The program is driven episode-by-episode fro
 | [03-order-parameters.md](03-order-parameters.md) | ψ₆, C₆, R_g, RC — definitions and exact algorithms |
 | [04-code-reference.md](04-code-reference.md) | File-by-file, routine-by-routine, COMMON-block and variable reference |
 | [05-io-formats.md](05-io-formats.md) | CLI, `run.txt`, `start.txt`, `bd_xyz1.txt`, `out_param.json`, mobility table |
-| [06-rl-integration.md](06-rl-integration.md) | How `bd_env.py` drives the binary — the contract the rewrite must preserve |
-| [07-porting-notes.md](07-porting-notes.md) | Bugs, quirks, dead code, numerical-fidelity traps, CUDA and pybind11 plan |
+| [06-rl-integration.md](06-rl-integration.md) | How `bd_env.py` drove the binary — the contract the rewrite preserves |
+| [07-porting-notes.md](07-porting-notes.md) | Bugs, quirks, dead code, numerical-fidelity traps |
+
+### The implementation (bd_csa)
+
+| File | Contents |
+|---|---|
+| [08-implementation-map.md](08-implementation-map.md) | Architecture, file-by-file, the CUDA design, where each legacy behaviour ended up |
+| [09-api-reference.md](09-api-reference.md) | Python API, C++ API, the `bdpd` CLI, `bench_cuda` |
+| [10-usage-guide.md](10-usage-guide.md) | Build, test, run, use from Python and from RL; troubleshooting |
+| [11-validation-and-status.md](11-validation-and-status.md) | What is proven and on which machine, open defects, what is left |
+
+**Start with [11-validation-and-status.md](11-validation-and-status.md)** for the
+current state, then [10-usage-guide.md](10-usage-guide.md) to run something.
 
 ## Quick facts
 
@@ -52,17 +73,22 @@ annealed out of a disordered fluid. The program is driven episode-by-episode fro
 | Observables written | `ψ₆`, `C₆`, seed, step, `λ` | `out_param.json` |
 | Runtime (1 M steps, 1 core, Apple M-series) | **≈ 4.7 min** | measured |
 
-## Verification performed while writing these docs
+## Verification of the legacy spec (docs 01–07)
 
-Everything below was checked against the actual program, not inferred:
+Everything below was checked against the actual Fortran program, not inferred.
+The corresponding audit of the *implementation* is in
+[11-validation-and-status.md](11-validation-and-status.md) §11.2.
 
 * The source was rebuilt from scratch with `gfortran 16.1.0 -O` — it compiles
   clean with no modifications.
 * A 20,000-step run took **5.66 s** (283 µs/step, 6.3 ns per particle pair),
   giving the performance baseline quoted above.
-* `R_g` and `RC` printed by the program were reproduced from the dumped
-  coordinates using the formulas in [03-order-parameters.md](03-order-parameters.md)
-  to 6 significant figures (`R_g = 21014.5 nm`, `RC = 0.76125`).
+* `R_g` and `RC` printed by the program were reproduced from the raw coordinates
+  using the formulas in [03-order-parameters.md](03-order-parameters.md). For the
+  shipped `start.txt` at t = 0: `R_g = 21015.90986 nm`, `C₆ = 4.28`,
+  `ψ₆ = 0.40508`, `RC = 0.76363`. **[data/GOLDEN.md](../data/GOLDEN.md) is the
+  authoritative list of regression targets** — an earlier draft of these docs
+  quoted values taken from a configuration one run removed from `start.txt`.
 * The unit-conversion constants `fac1` and `fac2` in `run.txt` were shown to
   correspond to `D₀ = k_BT/(6πηa)` with `η = 0.890 mPa·s`, agreeing to 0.03 %
   ([02-numerical-methods.md](02-numerical-methods.md)).
