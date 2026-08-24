@@ -36,6 +36,10 @@ mkdir -p run1 && cd run1 && cp ../data/{run.txt,start.txt,2dtabledssnp300.txt} .
 # Throughput sweep against the Fortran baseline
 ./build/cmake/bench_cuda 5000
 
+# Python: run a trajectory and render snapshots (needs the venv, see below)
+.venv/bin/python scripts/run_and_plot.py                  # 10 images -> frames/
+.venv/bin/python scripts/run_and_plot.py --device cuda --images 20 --dashboard
+
 # Statistical validation vs the Fortran (tier 5)
 python3 tests/compare_trajectories.py 20 50000
 ```

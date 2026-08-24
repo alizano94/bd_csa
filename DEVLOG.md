@@ -484,6 +484,64 @@ rather than restating numbers.
 
 ---
 
+## Phase M6 — visualization, and the first real execution of the Python layer
+
+### What was added
+- `compute_order_params_local()` in the core: the existing function returned only
+  cluster-wide scalars, but colouring particles needs **per-particle**
+  |ψ₆⁽ⁱ⁾| and neighbour counts. Exposed as `sim.local_psi6(env)` /
+  `sim.neighbour_counts(env)`.
+- `python/bd_csa/visualize.py`: `plot_configuration` (true-to-scale circles of
+  radius `a` coloured by local order, with the **global** order parameters in an
+  annotation box), `plot_order_parameters` (stacked ψ₆/C₆/R_g/RC traces),
+  `plot_dashboard` (both, with a time marker), `snapshot_series` (run and render
+  in one call, all in memory).
+- `requirements.txt`, and CMake now prefers an installed pybind11 over fetching.
+
+### Local vs global order is not a detail
+On the shipped initial configuration `<|ψ₆⁽ⁱ⁾|> = 0.752` while the global
+`|<ψ₆⁽ⁱ⁾>| = 0.405`. Those are different quantities: a polycrystal of
+well-oriented grains has high local order whose phases cancel in the average.
+A test asserts the inequality holds, so the two can never be silently confused.
+
+The rendered frames make this concrete — at t = 12 s the cluster is a single
+large crystal (uniform yellow, visibly hexagonal) with one misoriented grain at
+the top. That grain is the entire reason global ψ₆ sits at 0.78 rather than ~1,
+and it is invisible in the scalar alone.
+
+### Three bugs, all found only by running it
+
+The Python layer had never been executed before this phase. Every one of these
+was a first-execution failure:
+
+1. **`relocation R_X86_64_PC32 ... can not be used when making a shared object`.**
+   The static core and CUDA libraries were built without `-fPIC`; a Python
+   extension is a shared object, so every input must be position independent.
+   Fixed with `CMAKE_POSITION_INDEPENDENT_CODE ON`.
+2. **`undefined symbol: fatbinData`.** `CUDA_SEPARABLE_COMPILATION` was left ON
+   from M2, emitting a device-link stub that never got resolved when the static
+   library was pulled into the `.so`. All device code lives in one translation
+   unit, so separable compilation bought nothing — turned OFF, with
+   `CUDA_RESOLVE_DEVICE_SYMBOLS ON`.
+3. **`RecursionError` on `from bd_csa import visualize`.** The lazy
+   `__getattr__` used `from . import visualize`, which is an attribute lookup on
+   the package and therefore re-entered `__getattr__` forever. Fixed with
+   `importlib.import_module` plus caching in `globals()`.
+
+### Validation through the binding
+The Python path reproduces the tier-1 goldens exactly — ψ₆ 0.40508, C₆ 4.28,
+R_g 21015.90986, RC 0.76363 — and `local_psi6` matches the C++ test (range
+[0,1], mean 0.7524, one isolated particle). All four ctest suites still pass
+after the CMake changes.
+
+### Measured
+A 12-frame trajectory (120,000 steps, 12 s simulated, λ = 30) took **31.3 s**
+wall on CPU including rendering, ≈261 µs/step against the 237 µs/step bare
+integrator. ψ₆ rose 0.405 → 0.778, C₆ 4.28 → 5.27, R_g 21016 → 19454 nm:
+textbook directed self-assembly.
+
+---
+
 ## Where things stand
 
 | | status |

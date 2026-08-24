@@ -26,6 +26,26 @@ struct OrderParams {
 OrderParams compute_order_params(const Config& c, const double* x,
                                  const double* y, int np);
 
+// Same computation, but also reporting the PER-PARTICLE local order.
+//
+// The global psi6 is |<psi6_i>| over the whole cluster; what this fills in is
+// |psi6_i| for each particle individually -- how hexatically ordered that
+// particle's own neighbourhood is, in [0,1]. The two answer different
+// questions: a polycrystal of well-formed grains at random orientations has
+// high per-particle |psi6_i| but low global psi6, because the phases cancel in
+// the average. Visualising the per-particle field is exactly how you tell those
+// cases apart.
+//
+// Buffers must have room for np entries each; either may be null.
+//   psi6_local  |psi6_i| in [0,1]; 0 for a particle with no neighbours
+//   neighbours  neighbour count within rmin, useful for spotting edge particles
+//
+// Particles outside the measurement window get 0 in both. Since the shipped
+// expbox is the full cell that never happens in practice.
+OrderParams compute_order_params_local(const Config& c, const double* x,
+                                       const double* y, int np,
+                                       double* psi6_local, int* neighbours);
+
 // RC alone, for testing the composite against a known (R_g, C6) pair.
 double compute_rc(double rg_nm, double c6);
 

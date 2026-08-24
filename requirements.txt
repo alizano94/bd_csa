@@ -1,0 +1,37 @@
+# bd_csa Python dependencies
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# Then configure the build so it picks up pybind11 from the venv rather than
+# downloading it:
+#
+#   cmake -B build/cmake -DCMAKE_BUILD_TYPE=Release \
+#         -DPython3_EXECUTABLE=$PWD/.venv/bin/python
+#   cmake --build build/cmake -j16
+#
+# CMake looks for an installed pybind11 first and only falls back to fetching it
+# from GitHub if none is found, so installing it here keeps the build offline.
+
+# --- build-time: required to compile the _bd_csa extension module ------------
+pybind11>=2.11
+
+# --- runtime: core -----------------------------------------------------------
+# Positions and observations cross the C++/Python boundary as numpy arrays.
+numpy>=1.24
+
+# --- runtime: trajectory storage ---------------------------------------------
+# Trajectories are stored as HDF5 (python/bd_csa/trajectory.py): self-describing,
+# cross-language, and supports partial reads of files larger than memory.
+# Only needed for saving/loading trajectories, not to run a simulation.
+h5py>=3.8
+
+# --- runtime: visualization --------------------------------------------------
+# Particle-configuration snapshots and order-parameter plots
+# (python/bd_csa/visualize.py). Not needed to run simulations.
+matplotlib>=3.6
+
+# --- optional: reinforcement learning ----------------------------------------
+# Only needed for python/bd_csa/gym_env.py; imported lazily, so the rest of the
+# package works without it. Uncomment if you are driving the simulator from RL.
+# gymnasium>=0.29

@@ -146,6 +146,33 @@ class VecSimulator {
     return out;
   }
 
+  // Per-particle |psi6_i| for one environment, shape (np,), values in [0,1].
+  //
+  // Distinct from the global psi6, which is |<psi6_i>| -- a polycrystal of
+  // well-formed grains at random orientations has high local order but low
+  // global order, because the phases cancel. This is the field to colour a
+  // configuration plot by.
+  [[nodiscard]] py::array_t<double> local_psi6(int env) const {
+    check_env(env);
+    py::array_t<double> out(cfg_.np);
+    std::vector<int> nb(cfg_.np);
+    compute_order_params_local(cfg_, states_[env].x.data(),
+                               states_[env].y.data(), cfg_.np,
+                               static_cast<double*>(out.request().ptr), nb.data());
+    return out;
+  }
+
+  // Neighbour count within rmin for one environment, shape (np,) int32.
+  // Zero is legitimate for a particle detached from the cluster.
+  [[nodiscard]] py::array_t<int> neighbour_counts(int env) const {
+    check_env(env);
+    py::array_t<int> out(cfg_.np);
+    compute_order_params_local(cfg_, states_[env].x.data(),
+                               states_[env].y.data(), cfg_.np, nullptr,
+                               static_cast<int*>(out.request().ptr));
+    return out;
+  }
+
   // Full order parameters, so reward shaping can use R_g and RC without a
   // second pass over the positions.
   [[nodiscard]] std::vector<py::dict> order_parameters() const {
@@ -168,6 +195,12 @@ class VecSimulator {
   [[nodiscard]] const std::string& device() const { return device_; }
 
  private:
+  void check_env(int e) const {
+    if (e < 0 || e >= n_envs_)
+      throw std::out_of_range("env index " + std::to_string(e) +
+                              " outside [0, " + std::to_string(n_envs_) + ")");
+  }
+
   [[nodiscard]] OrderParams order_params_for(int e) const {
     return compute_order_params(cfg_, states_[e].x.data(), states_[e].y.data(),
                                 cfg_.np);
@@ -272,6 +305,13 @@ state, which is what makes batching sound.
       .def("positions", &VecSimulator::positions)
       .def("observations", &VecSimulator::observations)
       .def("order_parameters", &VecSimulator::order_parameters)
+      .def("local_psi6", &VecSimulator::local_psi6, py::arg("env") = 0,
+           "Per-particle |psi6_i| in [0,1], shape (np,). This is local hexatic "
+           "order, NOT the global |<psi6_i>| returned by observations(): a "
+           "polycrystal has high local and low global order.")
+      .def("neighbour_counts", &VecSimulator::neighbour_counts, py::arg("env") = 0,
+           "Neighbours within rmin per particle, shape (np,). Zero is valid for "
+           "a particle detached from the cluster.")
       .def_property_readonly("n_envs", &VecSimulator::n_envs)
       .def_property_readonly("config", &VecSimulator::config)
       .def_property_readonly("device", &VecSimulator::device);

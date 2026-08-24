@@ -29,6 +29,13 @@ One RL action corresponds to ``n_steps = 1_000_000`` integration steps at
 simulated *duration* fixed rather than the step count.
 """
 
+from .trajectory import (  # noqa: F401
+    Trajectory,
+    TrajectoryRecorder,
+    load_configuration,
+    replay,
+    save_configuration,
+)
 from ._bd_csa import (  # noqa: F401
     Config,
     OrderParams,
@@ -45,6 +52,33 @@ __all__ = [
     "Simulator",
     "cuda_available",
     "read_start_txt",
+    "Trajectory",
+    "TrajectoryRecorder",
+    "save_configuration",
+    "load_configuration",
+    "replay",
+    "visualize",
 ]
+
+
+def __getattr__(name):
+    """Expose `bd_csa.visualize` lazily.
+
+    Importing it eagerly would make matplotlib a hard dependency of the whole
+    package; this way simulations run without it and the import error only
+    appears if you actually try to plot.
+
+    Must use importlib rather than `from . import visualize`: the latter is an
+    attribute lookup on this package, which re-enters __getattr__ and recurses
+    until the stack blows. Caching in globals() also stops __getattr__ being
+    consulted on subsequent accesses.
+    """
+    if name == "visualize":
+        import importlib
+
+        mod = importlib.import_module(f"{__name__}.visualize")
+        globals()["visualize"] = mod
+        return mod
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __version__ = "0.1.0"

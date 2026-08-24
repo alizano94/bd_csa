@@ -53,6 +53,7 @@ annealed out of a disordered fluid. The program is driven episode-by-episode fro
 | [09-api-reference.md](09-api-reference.md) | Python API, C++ API, the `bdpd` CLI, `bench_cuda` |
 | [10-usage-guide.md](10-usage-guide.md) | Build, test, run, use from Python and from RL; troubleshooting |
 | [11-validation-and-status.md](11-validation-and-status.md) | What is proven and on which machine, open defects, what is left |
+| [12-image-state-representation.md](12-image-state-representation.md) | **Plan (proposal):** unsupervised image-based state representation to replace the hand-crafted (psi6, C6) RL state |
 
 **Start with [11-validation-and-status.md](11-validation-and-status.md)** for the
 current state, then [10-usage-guide.md](10-usage-guide.md) to run something.

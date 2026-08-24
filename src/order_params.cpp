@@ -17,19 +17,34 @@ double compute_rc(double rg_nm, double c6) {
   return wrc * ra + (1.0 - wrc) * crc;
 }
 
-OrderParams compute_order_params(const Config& c, const double* x,
-                                 const double* y, int np) {
+namespace {
+
+// Shared implementation. psi6_local / neighbours may be null; when supplied they
+// are indexed by ORIGINAL particle index, not by the compacted one, so callers
+// can line them up with the positions they passed in.
+OrderParams compute_impl(const Config& c, const double* x, const double* y,
+                         int np, double* psi6_local, int* neighbours) {
   constexpr double kCtestv = 0.32;
 
-  // Measurement window, compacted densely (the 7.2 fix).
+  if (psi6_local)
+    for (int i = 0; i < np; ++i) psi6_local[i] = 0.0;
+  if (neighbours)
+    for (int i = 0; i < np; ++i) neighbours[i] = 0;
+
+  // Measurement window, compacted densely (the 7.2 fix). `orig` remembers where
+  // each compacted entry came from so per-particle results can be scattered
+  // back to the caller's indexing.
   std::vector<double> px, py;
+  std::vector<int> orig;
   px.reserve(np);
   py.reserve(np);
+  orig.reserve(np);
   for (int i = 0; i < np; ++i) {
     if (std::abs(x[i]) <= 0.5 * c.expbox[0] &&
         std::abs(y[i]) <= 0.5 * c.expbox[1]) {
       px.push_back(x[i]);
       py.push_back(y[i]);
+      orig.push_back(i);
     }
   }
   const int n = static_cast<int>(px.size());
@@ -81,6 +96,18 @@ OrderParams compute_order_params(const Config& c, const double* x,
   acci /= n;
   op.psi6 = std::sqrt(accr * accr + acci * acci);
 
+  // Per-particle magnitude |psi6_i|, scattered back to the caller's indexing.
+  // Note this is taken BEFORE the global average: |<psi6_i>| (what op.psi6
+  // holds) and <|psi6_i|> are different quantities, and the per-particle field
+  // is the one that shows crystalline domains.
+  if (psi6_local || neighbours) {
+    for (int i = 0; i < n; ++i) {
+      if (psi6_local)
+        psi6_local[orig[i]] = std::sqrt(psir[i] * psir[i] + psii[i] * psii[i]);
+      if (neighbours) neighbours[orig[i]] = nb[i];
+    }
+  }
+
   // C6: count neighbours whose local hexatic phase is aligned to within
   // acos(0.32) ~ 71.3 degrees.
   double conn_sum = 0.0;
@@ -117,6 +144,19 @@ OrderParams compute_order_params(const Config& c, const double* x,
   op.rg = std::sqrt(var / n);
   op.rc = compute_rc(op.rg, op.c6);
   return op;
+}
+
+}  // namespace
+
+OrderParams compute_order_params(const Config& c, const double* x,
+                                 const double* y, int np) {
+  return compute_impl(c, x, y, np, nullptr, nullptr);
+}
+
+OrderParams compute_order_params_local(const Config& c, const double* x,
+                                       const double* y, int np,
+                                       double* psi6_local, int* neighbours) {
+  return compute_impl(c, x, y, np, psi6_local, neighbours);
 }
 
 }  // namespace bd_csa

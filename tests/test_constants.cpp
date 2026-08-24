@@ -170,6 +170,50 @@ void test_order_params(const Config& c) {
   check::near_abs(op.c6, 4.28000, 5e-6, "C6");
   check::near_abs(op.rc, 0.76363, 5e-6, "RC");
 
+  // Per-particle field used for visualisation colouring.
+  std::puts("\n-- per-particle psi6 --");
+  std::vector<double> psi_local(c.np, -1.0);
+  std::vector<int> nbrs(c.np, -1);
+  const OrderParams op2 =
+      compute_order_params_local(c, s.x.data(), s.y.data(), c.np,
+                                 psi_local.data(), nbrs.data());
+  check::near_abs(op2.psi6, op.psi6, 0.0,
+                  "local variant returns identical globals");
+
+  double lo = 2.0, hi = -1.0, mean = 0.0, nb_mean = 0.0;
+  int nb_max = 0, isolated = 0;
+  for (int i = 0; i < c.np; ++i) {
+    lo = std::min(lo, psi_local[i]);
+    hi = std::max(hi, psi_local[i]);
+    mean += psi_local[i];
+    nb_mean += nbrs[i];
+    nb_max = std::max(nb_max, nbrs[i]);
+    if (nbrs[i] == 0) ++isolated;
+  }
+  mean /= c.np;
+  nb_mean /= c.np;
+  check::report(lo >= 0.0 && hi <= 1.0, "every |psi6_i| lies in [0,1]",
+                "range [" + std::to_string(lo) + ", " + std::to_string(hi) + "]");
+
+  // rmin = 3780 nm = 2.634a selects the first coordination shell only, so a
+  // hexatic lattice tops out near 6. Verified independently against the raw
+  // coordinates: min 0, max 6, mean 4.80.
+  check::near_abs(nb_mean, 4.80, 0.01, "mean neighbour count");
+  check::report(nb_max <= 12, "max neighbour count is first-shell",
+                "max " + std::to_string(nb_max));
+  // Zero-neighbour particles are legitimate, not a defect: particle 12 sits
+  // 21.2a from the centroid (R_g is 14.6a) with its nearest neighbour 2.80a
+  // away, just outside the cutoff. They correctly report |psi6_i| = 0 and will
+  // render at the bottom of the colour scale.
+  check::eq_int(isolated, 1, "isolated particles in the golden config");
+  // <|psi6_i|> must EXCEED |<psi6_i>|: local order survives averaging only if
+  // the phases agree, so the phase-coherent global value is always the smaller
+  // of the two. If this ever inverted, the two were confused somewhere.
+  check::report(mean > op.psi6,
+                "<|psi6_i|> > |<psi6_i>| (phases partially cancel)",
+                "local mean " + std::to_string(mean) + " vs global " +
+                    std::to_string(op.psi6));
+
   // RC is a pure function of (R_g, C6); check it independently of the geometry.
   check::near_abs(compute_rc(21015.90986, 4.28), 0.763633, 1e-6,
                   "RC(R_g, C6) closed form");

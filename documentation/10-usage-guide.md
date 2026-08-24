@@ -208,6 +208,201 @@ Three things to know before you train:
    currently takes `action[0]` for the whole batch. For per-environment actions
    use `device="cpu"` until the kernel change lands (§11.5).
 
+## 10.4a Saving and reusing runs
+
+The legacy interface passed state through text files (`start.txt` in,
+`bd_xyz1.txt` + `op1.txt` + `out_param.json` out). That is still supported for
+interoperability, but it is not the recommended way to keep results.
+
+### Trajectories: one HDF5 file per run
+
+```python
+out  = visualize.snapshot_series(sim, lam=30.0, n_frames=9, steps_per_frame=10_000)
+traj = out["trajectory"]
+traj.save("runs/anneal.h5")
+```
+or from the script: `--save-trajectory runs/anneal.h5`.
+
+Every array has a leading time axis:
+
+| dataset | shape | meaning |
+|---|---|---|
+| `positions` | `(T, np, 2)` | coordinates, **nm** |
+| `psi6`, `c6`, `rg`, `rc` | `(T,)` | global order parameters |
+| `psi6_local` | `(T, np)` | per-particle \|ψ₆⁽ⁱ⁾\| |
+| `neighbours` | `(T, np)` int32 | neighbours within `rmin` |
+| `time_s` | `(T,)` | simulated seconds |
+| `lam` | `(T,)` | field strength — see below |
+| `step` | `(T,)` int64 | cumulative integration steps |
+
+**The λ convention.** `lam[k]` is the field strength applied *to reach* state
+`k`, not the one applied from it. Frame 0 is the initial configuration, which no
+action produced, so `lam[0]` is **NaN**. This matches what RL expects: action
+`lam[k]` maps state `k-1` to state `k`.
+
+`meta` embeds the whole configuration — `np`, `a`, `dt`, every physics flag,
+seed, device and package version — so a file records *which physics produced it*.
+That matters because the corrected physics shifts ψ₆ by ~8% against the legacy
+behaviour; without the metadata you cannot tell two runs apart later.
+
+Size is small: 300 particles × every field ≈ 7 kB per frame, so a 5-frame run is
+0.07 MB gzip-compressed.
+
+### Replaying a run exactly
+
+`seed[k]` records the RNG seed of the step that produced frame `k` (`-1` on
+frame 0, matching the `lam` NaN convention). Together with `positions[0]`, `lam`,
+the step counts and the **embedded `run.txt`**, a trajectory is sufficient to
+reconstruct itself:
+
+```python
+from bd_csa import Trajectory, replay
+t = Trajectory.load("runs/anneal.h5")
+replay(t, "data/2dtabledssnp300.txt")
+# replay EXACT: max |dx| = 0.000e+00 nm, max |dpsi6| = 0.000e+00 on cpu
+```
+
+Verified: **max position error 0.0 nm**, bit-for-bit.
+
+The full `run.txt` (~9 kB) is embedded because `Config` carries many fields the
+Python bindings do not expose as setters — `from_run_txt` is the only way to
+rebuild it faithfully, so the text has to travel with the data.
+
+Three things will legitimately break a replay, and all three are recorded in
+`meta` so you can tell which applies:
+
+* **Device.** CUDA computes forces in FP32, CPU in FP64; the two diverge
+  chaotically. `replay` defaults to the device the run used.
+* **Physics flags.** Restored from `meta`; a mismatch changes the dynamics.
+* **Package version.** A change to the force kernel or RNG will show up here —
+  which is the point of keeping the check.
+
+Trajectories written before seeds were recorded raise a clear error rather than
+replaying wrongly.
+
+### Resuming
+
+```python
+from bd_csa import Trajectory
+traj = Trajectory.load("runs/anneal.h5")
+sim.reset(traj.state())        # last frame; state(0) or state(k) for any other
+```
+or `--start runs/anneal.h5` (with `--frame k` to pick a different one).
+
+Verified: resuming from a saved trajectory reproduces the final state **exactly**
+— the continued run's frame 0 matches the original's last frame to every digit.
+
+### Single configurations
+
+```python
+bd_csa.save_configuration(positions, "init.npy", cfg.a)   # exact, compact
+bd_csa.save_configuration(positions, "init.txt", cfg.a)   # legacy, for bdpd
+bd_csa.save_configuration(positions, "init.h5",  cfg.a)   # with metadata
+
+x0 = bd_csa.load_configuration("init.npy", cfg.np, cfg.a)
+```
+or `--save-initial init.npy` from the script.
+
+Measured round-trip error: `.h5` and `.npy` are **exact** (0 nm); `.txt` loses
+**7×10⁻³ nm** because the legacy format writes 5 decimals in units of `a`. Use
+`.txt` only to feed the Fortran or the C++ CLI, never to checkpoint.
+
+### Why not pickle
+
+Pickle stores the Python object graph, so it is Python-only, breaks silently
+when a class definition changes, and executes arbitrary code on load. HDF5
+stores data with a schema — readable from any language, survives refactors of
+`trajectory.py`, and supports partial reads of files larger than memory.
+
+## 10.4b Visualization
+
+`bd_csa.visualize` renders particle configurations and order-parameter traces
+straight from the in-memory simulator. Nothing is read or written except the
+PNGs you ask for. It needs `matplotlib` (see `requirements.txt`) and is imported
+lazily, so simulations run without it.
+
+### The ready-made script
+
+`scripts/run_and_plot.py` runs one trajectory and writes N images. It inserts
+`python/` on `sys.path` itself, so no `PYTHONPATH` is needed:
+
+```sh
+.venv/bin/python scripts/run_and_plot.py                     # 10 images, CPU
+.venv/bin/python scripts/run_and_plot.py --device cuda --images 20
+.venv/bin/python scripts/run_and_plot.py --dashboard --lam 45
+.venv/bin/python scripts/run_and_plot.py --legacy            # legacy physics
+```
+
+`--images` is the **total** written, counting the t=0 frame. `--start` accepts
+either a `start.txt` (exactly `np` rows) or a multi-frame trajectory such as
+`bd_xyz1.txt`, in which case it resumes from the **last** frame — the same
+chaining the legacy driver used:
+
+```sh
+.venv/bin/python scripts/run_and_plot.py --start run1/bd_xyz1.txt --images 20
+```
+
+`--save-history out.npz` also stores the order-parameter traces for later
+re-plotting without re-running.
+
+Measured with the defaults (10 images, 10,000 steps apart = 9 s simulated):
+**23.5 s on CPU**, **1.3 s for 4 images on CUDA** — past a few thousand steps per
+frame the GPU path is dominated by rendering, not simulation.
+
+### A trajectory as a sequence of snapshots
+
+"Every step" is not achievable — an episode is 10⁶ steps. Sample instead: step
+in chunks and render after each.
+
+```python
+import bd_csa
+from bd_csa import visualize
+
+cfg = bd_csa.Config.from_run_txt("data/run.txt")
+x0  = bd_csa.read_start_txt("data/start.txt", cfg)
+sim = bd_csa.Simulator(cfg, "data/2dtabledssnp300.txt", n_envs=1, device="cpu")
+sim.reset(x0)
+
+out = visualize.snapshot_series(
+    sim, lam=30.0,
+    n_frames=20, steps_per_frame=10_000,   # 20 frames over 20 s simulated
+    out_dir="frames",
+)
+# out["history"] holds psi6/c6/rg/rc; out["time_s"] the time axis
+```
+
+Cost: `n_frames * steps_per_frame` integration steps. At ~240 µs/step on CPU the
+example above is ~48 s. A full 10⁶-step episode in 100 frames is ~4 min.
+
+### The two views
+
+| function | shows |
+|---|---|
+| `plot_configuration(pos, psi6_local)` | particles as true-to-scale circles of radius `a`, coloured by **local** order |
+| `plot_order_parameters(history)` | global ψ₆, C₆, R_g, RC versus time, stacked |
+| `plot_dashboard(pos, history, psi6_local)` | both, with a marker on the traces at the current frame |
+
+Each takes plain numpy arrays, so they work on data from anywhere — not only
+from a live simulator.
+
+### Local vs global order — they are different quantities
+
+`sim.local_psi6(env)` returns |ψ₆⁽ⁱ⁾| per particle; `sim.observations()` returns
+the global |⟨ψ₆⁽ⁱ⁾⟩|. On the shipped initial configuration the local mean is
+**0.75** while the global value is **0.41**, because a polycrystal of
+well-oriented grains has high local order whose phases cancel in the average.
+Colouring by the local field is precisely what makes grain structure visible;
+plotting the global value alone would not show it.
+
+The colour scale is fixed to [0, 1] rather than autoscaled per frame — otherwise
+the colours would not be comparable across an annealing sequence and the bar
+would misrepresent progress.
+
+Particles with no neighbour inside `rmin` correctly report |ψ₆⁽ⁱ⁾| = 0 and render
+at the bottom of the scale. That is physical, not a defect: the shipped
+configuration has exactly one such particle, 21.2 a from the centroid with its
+nearest neighbour 2.80 a away, just outside the 2.634 a cutoff.
+
 ## 10.5 Choosing physics options
 
 | Goal | Settings |
