@@ -10,6 +10,15 @@ struct OrderParams {
   double rg   = 0.0;  // nm, radius of gyration
   double rc   = 0.0;  // composite crystallinity, logged only
   int    n_in_window = 0;
+
+  // Real and imaginary parts of the global average <psi6_i>, from which psi6 =
+  // hypot(re, im). The PHASE carries the lattice orientation: psi6 is 6-fold,
+  // so the hexatic director is atan2(im, re)/6, defined modulo 60 degrees.
+  // Exposed because reimplementing psi6 elsewhere to recover the phase is a
+  // duplication that silently diverges -- notably over the expbox measurement
+  // window, which excludes particles that have drifted out of the cell.
+  double psi6_re = 0.0;
+  double psi6_im = 0.0;
 };
 
 // psi6, C6, R_g and RC exactly as conn6calc.f, with the 7.2 sparse-array defect

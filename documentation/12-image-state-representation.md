@@ -50,11 +50,28 @@ The simulator work is finished and validated. What it contributes:
 | 10⁶ configurations | ~2.6 h |
 
 The prior pipeline's "few-thousand-image dataset" — the thing that motivated the
-conv stem's locality bias in the first place — is no longer a constraint. **If
-you can train on 10⁵–10⁶ images instead of a few thousand, the argument for the
-conv stem weakens considerably**, since plain ViT patch embedding's weakness is
-specifically data efficiency. That is worth deciding deliberately rather than
-inheriting.
+conv stem's locality bias in the first place — is no longer a constraint. I
+argued this weakened the case for the conv stem, since plain ViT patchify's main
+weakness is data efficiency.
+
+**Decided: keep the conv stem.** The consequence is that the leakage noted in
+§12.1 becomes something to *manage*, not something the data scale lets us avoid.
+Concretely, with four 3×3 stride-2 layers the receptive field is
+
+```
+L1: RF = 3    L2: RF = 3 + 2·2 = 7    L3: RF = 7 + 2·4 = 15    L4: RF = 15 + 2·8 = 31
+```
+
+so tokens sit **16 px apart but each sees 31 px** — every token has already
+absorbed ~7–8 px of each neighbouring patch before masking happens. At 256×256
+over ±30 a a particle is only **8.5 px** across, so a masked particle near a
+patch boundary is substantially visible through its neighbours' tokens. Two
+mitigations worth building in from the start:
+
+* **Shrink the stem's receptive field** toward patch-aligned (fewer layers or
+  smaller kernels) so RF approaches 16 px.
+* **Test for cheating**: a conv-stem model that beats plain patchify on
+  *reconstruction* but not on downstream SOM quality is the signature.
 
 **Physics labels come free.** Every frame in an HDF5 trajectory (§10.4a) carries
 ψ₆, C₆, R_g, RC, λ, seed and time. These are for *evaluation only* — never
@@ -93,27 +110,143 @@ Three ways out, and they interact with the conv-stem question:
 3. **Raise the mask ratio** — the blunt instrument, and the one that compounds
    with conv-stem leakage as noted in your session.
 
-My read: this is an argument for (2), and it is worth measuring the empty-patch
-fraction across the *whole* dataset (dispersed states will be far emptier than
-crystalline ones) before fixing a ratio.
+**Decided: content-aware masking (2).** Still worth measuring the empty-patch
+fraction across the *whole* dataset before fixing a ratio — dispersed states are
+far emptier than crystalline ones, so a single global ratio may not serve both
+ends of the trajectory.
 
-## 12.4 Symmetry — and why MAE changes the answer
+### Training images are not visualisation images
 
-The physics is invariant under global translation and rotation; pixels are not.
-If the encoder spends capacity on cluster orientation, the SOM will organise
-partly by orientation, which is exactly the kind of nuisance structure that
-would make a topological map misleading.
+**Decided: the model sees particles and nothing else.** No axes, ticks, labels,
+colourbar, annotation header, or figure margins — every one of those is a
+high-contrast artifact that a masked-reconstruction objective will happily spend
+capacity on, and the annotation text is *especially* toxic because it encodes
+ψ₆/C₆ numerically in the pixels the model is asked to reconstruct.
 
-The important wrinkle: **MAE deliberately uses minimal augmentation** — masking
-*is* the pretext task, and heavy augmentation is not part of the recipe (unlike
-DINO/contrastive, which depend on it). So "just add rotation augmentation"
-fits DINO but sits awkwardly with MAE.
+This means the R0 rasteriser is a **separate output path** from
+`bd_csa.visualize`, not a faster version of it:
 
-That points to **canonicalisation instead of augmentation** for the MAE route:
-centre on the centroid (unambiguous, continuous) and optionally rotate to a
-canonical frame. Rotation canonicalisation has a discontinuity when the frame
-flips, which would show up as a spurious jump in the SOM — worth testing for
-explicitly.
+| | `visualize.plot_configuration` | R0 training rasteriser |
+|---|---|---|
+| purpose | human inspection | model input |
+| chrome | axes, colourbar, annotation box | none — pure raster |
+| colour | per-particle ψ₆ (viridis) | occupancy only; **no ψ₆ colouring**, which would feed the hand-crafted feature back in |
+| output | PNG via matplotlib, ~0.3 s | numpy array, target ~1 ms |
+
+## 12.4 Symmetry — what is and isn't invariant
+
+> **Correction.** An earlier version of this section asserted that "the physics
+> is invariant under global translation and rotation." That is **wrong**, and the
+> error mattered: it would have licensed a rotation canonicalisation that
+> destroys real information.
+
+### The exact symmetry group is C4v, not SO(2)
+
+The DEP trap *is* isotropic — `|E|² = 16(x²+y²)/dg²` depends only on radius. But
+the dipole interaction uses the field **vector** `E = (−4x/dg, +4y/dg)`, a saddle
+whose axes are pinned to the electrodes.
+
+Rotating a configuration by φ leaves the dipole energy unchanged only if
+`R_φ⁻¹ M R_φ = ±M`, where `M ∝ diag(1, −1)`. Conjugating `diag(1,−1)` by a
+rotation turns the quadrupole axis by **2φ**, so this holds only when
+`2φ ≡ 0 (mod π)`:
+
+```
+φ ∈ {0°, 90°, 180°, 270°}
+```
+
+At 90° the field picks up a global sign, and the dipole energy is *quadratic* in
+E — `3(Eᵢ·r̂)(Eⱼ·r̂) − Eᵢ·Eⱼ` — so both sign flips cancel. Reflections about the
+electrode axes follow by the same argument. DLVO and the Brownian term are
+isotropic and do not reduce the group further.
+
+**The exact symmetry is C4v: 8 elements.** A cluster rotated by 30° experiences
+genuinely different dipole forces — it is a different physical state, not the
+same state in a different pose.
+
+Translation is not an exact symmetry either: the trap sits at the field null, so
+displacing the cluster changes the DEP force. In practice the trap holds the
+centroid near the origin, so the residual drift is small and centring discards
+little.
+
+### Rotation canonicalisation would fail even if it were licensed
+
+The standard recipe — rotate to the gyration tensor's principal axis — is
+numerically ill-conditioned here, because a trapped cluster is very nearly
+circular. Measured on real configurations:
+
+| configuration | anisotropy `(λ₁−λ₂)/(λ₁+λ₂)` | major axis |
+|---|---|---|
+| `start.txt` | 0.019 | 80.5° |
+| λ=0, t=250 s | 0.032 | 25.0° |
+| λ=0, t=500 s | 0.032 | 34.4° |
+| λ=0, t=750 s | 0.011 | 120.7° |
+| λ=0, t=1000 s | 0.035 | 89.9° |
+
+With λ₁ ≈ λ₂ to within 1–3% the eigenvectors are effectively degenerate, so the
+"principal axis" is mostly noise: it wanders **96°** across a run in which the
+cluster's shape barely changes. Canonicalising on it would inject ~96° of
+spurious rotation into a smooth trajectory, surfacing in the SOM as jumps
+between physically adjacent states.
+
+The ψ₆-phase alternative fails in the complementary regime — well-defined for
+ordered states, undefined as |ψ₆| → 0, which is exactly the dispersed case
+(the λ=0 run ended at ψ₆ = 0.042).
+
+### Why MAE changes the augmentation calculus
+
+Contrastive methods (SimCLR, DINO) make invariance *the objective*: the loss
+explicitly pulls together two augmented views of one sample, so augmentation
+**is** the learning signal and directly buys invariance.
+
+MAE has no such mechanism. Its loss is pixel reconstruction of masked patches;
+it never compares two views. Feed it rotated images and it learns to reconstruct
+rotated images — it receives no signal that a rotated copy *should* embed
+identically. Under MAE, augmentation is dataset expansion, not an invariance
+mechanism. (The MAE paper also notes it needs only minimal augmentation, and
+that heavy augmentation hurts, because masking already supplies the
+regularisation.)
+
+**Consequence at our data scale:** augmenting is a poor substitute for
+generating. With 10⁵–10⁶ configurations available (§12.2), lattice orientations
+are sampled densely by the dynamics anyway, and compute is better spent on more
+*diverse trajectories* than on 8 copies of each frame. The C4v group is still
+worth having — as an **evaluation probe** (below), not as training data.
+
+### What to do
+
+| degree of freedom | treatment | why |
+|---|---|---|
+| translation | **canonicalise** — centre on the centroid | unambiguous, continuous, no flip discontinuity. Append `\|centroid\|` as a scalar if the drift is wanted back. |
+| continuous rotation | **leave alone** | not a symmetry; canonicalising would merge distinct states |
+| C4v (8 elements) | **neither** — use for evaluation | exact equivalence, but MAE cannot convert it into invariance, and data is cheap |
+| lattice orientation | **probably signal, not nuisance** — see below | the quadrupole breaks isotropy |
+
+Note the conv stem (kept, per §12.2) is translation-*equivariant* by
+construction, but the ViT's position embeddings are not — so centring still does
+real work.
+
+### The premise may be wrong, and it is testable
+
+Calling lattice orientation a nuisance variable presumes the lab frame is
+arbitrary. It is not: the quadrupole distinguishes the electrode axes, so the
+crystal's orientation **relative to those axes** may be genuine physics — the
+lattice may preferentially align with the field.
+
+The λ-ramp experiment (§12.5) answers this directly at no extra cost: track the
+global ψ₆ *phase* against the lab frame and test whether it is uniformly
+distributed or concentrates near 0°/90° (mod 60°, since ψ₆ is 6-fold and the
+field is 4-fold — an incommensurate pairing that makes the question more
+interesting, not less). If it concentrates, orientation is signal and must not
+be canonicalised or augmented away.
+
+### How to verify, whichever route
+
+1. Encode the 8 C4v-equivalent copies of a configuration; the embedding spread
+   should be ≈0 if the invariance took.
+2. Encode small *continuous* rotations; the embedding **should move**. If it does
+   not, the model has learned an invariance the physics does not have — which
+   would be a silent loss of information, not a success.
 
 ## 12.5 The open physics question is now answerable
 
@@ -122,15 +255,77 @@ spectrum, or real discrete phases?* — with the note that the Siamese network
 (A2) was needed because plain CNN classification blurred similar configurations,
 suggesting fine-grained, possibly discontinuous structure.
 
-That is now an experiment rather than an intuition. Generate **slow λ ramps** —
-sweep λ continuously from 0 to 60 over a long trajectory — and ask whether
-(ψ₆, C₆, R_g) move continuously or jump. Repeat across seeds. If order
-parameters show hysteresis or discontinuity, that is evidence of genuine phase
-structure and argues for a growing SOM over a fixed grid; if they move smoothly,
-a fixed grid is defensible.
+That is now an experiment rather than an intuition. Sweep λ **up and then back
+down**, holding at each value long enough to relax, and ask whether
+(ψ₆, C₆, R_g) move continuously or jump, and whether the two branches
+coincide. Repeat across seeds. Discontinuity or a genuine hysteresis loop is
+evidence of real phase structure and argues for a growing SOM; smooth,
+retraceable curves make a fixed grid defensible.
+
+### λ range and spacing
+
+**λ ∈ [0, 20]**, per theory — an earlier version of this section said 0 to 60,
+which is outside the physical range. Values used in the related literature:
+
+```
+λ = 0.2209,  0.8744,  1.9674,  19.9373
+```
+
+Note `0.8744` is also the value sitting in `run.txt` line 44 — the Fortran reads
+and discards it (λ comes from argv), but it independently confirms the scale.
+
+Those four span nearly **two decades**, so the sweep is **logarithmically
+spaced** by default. Measured, for 40 points per branch:
+
+| spacing | sample index of each literature λ |
+|---|---|
+| linear 0–20 | **[0, 2, 4, 39]** — three of four in the first four samples |
+| log 0.2–20 | **[1, 12, 19, 39]** — evenly spread |
+
+Linear spacing would spend ~90% of the schedule on the high-λ end where little
+changes. The four literature values are additionally **forced into the schedule
+exactly**, on both branches, so results are directly comparable with prior work.
+
+λ = 0 cannot appear in a log sweep; add it with `--include-lam 0` if the
+no-field limit is wanted (that is the null control already run — see the λ=0
+trajectory in `runs/`).
+
+### Starting configuration
+
+Starting from a **dispersed** state is better than starting from `start.txt`
+(ψ₆ = 0.405, already partly ordered): an up-ramp from disorder watches ordering
+happen, rather than beginning halfway through it. The λ=0 null-control run ended
+fully melted and is the natural choice:
+
+```sh
+--start runs/relax_lam0_1000s.h5      # takes the last frame; --frame k for others
+```
+
+**Caveat worth knowing:** that final state has R_g = 31,386 nm, while the
+mobility table covers 19,000–26,500 nm. Above the top of the table the R_g bin
+index is clamped, so mobility is held at the table edge until the cluster
+compacts back into range. This is the same clamping the legacy code did, not new
+behaviour, but it means the earliest points of the up-ramp run on an
+extrapolated mobility.
+
+### Output
+
+`scripts/lambda_ramp.py` writes one HDF5 with `lam`, a `branch` label
+(up/down), and per-seed `psi6`, `psi6_phase`, `c6`, `rg`, `rc`, `positions`,
+plus the embedded `run.txt` and the initial rotation angles. `--analyze` re-reads
+it without re-running, and writes **`*_hysteresis.png`** — the four order
+parameters against λ with the up and down branches drawn separately and a
+±1 std band across seeds, so a loop is only meaningful if it clears the band.
 
 **This is cheap and worth doing before any encoder exists**, because it decides
 the SOM design and it validates the premise of the whole pipeline.
+
+It also answers the orientation question in §12.4 at no extra cost: record the
+ψ₆ *phase* alongside its magnitude and check whether the lattice aligns with the
+electrode axes.
+
+**Delivered as a script you run.** `scripts/lambda_ramp.py`, written and
+smoke-tested on a few frames by me, executed by you — see §12.9.
 
 ## 12.6 What bd_csa must build
 
@@ -141,9 +336,7 @@ the SOM design and it validates the premise of the whole pipeline.
 | **R2** | λ-ramp experiment | §12.5 — continuous vs discrete phases |
 | **R3** | Dataset statistics | empty-patch fraction across the full state distribution, to fix the masking ratio on evidence |
 
-R0–R3 are all simulator-side, need no deep-learning stack, and are useful
-regardless of which architecture you settle on. **I'd propose stopping there**
-and leaving the MAE/SOM implementation to you, as you asked in the other session.
+R0–R3 are all simulator-side and need no deep-learning stack.
 
 ## 12.7 Evaluation, when there is a model
 
@@ -162,17 +355,37 @@ The physics labels make this concrete:
    nothing, but against the **GCN state representation the DQN already uses at
    97%**.
 
-## 12.8 What I need from you
+## 12.8 Decisions (answered)
 
 1. Is §12.1 a fair statement of the architecture?
+	1. The architecture seems good. At least untill the RL checkpoint which we will elaborate later. 
 2. Does the 10⁵–10⁶ image scale change your view on **conv stem vs plain ViT
    patch embedding**? (§12.2)
+	1. I think we should stick to the conv stem idea. I see bennefits from that. 
 3. Masking: content-aware, or tighter crop, or higher ratio? (§12.3)
+	1. Content aware seems the way to go. Also for model purposes the images should be preprocessesd to get rid of any image artifacts not related to the particles itself. For examples, axis, annotations, etc.
 4. Should I run the **λ-ramp experiment** (§12.5)? It is a few GPU-hours and
    answers the fixed-vs-growing SOM question with data.
+	1. I would likt to run this but not to loose control about this thread so we could create a python script and leave the running up to me. 
 5. Scope confirmation: build R0–R3 only, and leave MAE/SOM to you?
+	1. We shoud go step by step together along the way. Unless you are running small test to new code I would like to be the one handling the code execution.
 
-## 12.9 Dependencies
+## 12.9 Working agreement
+
+Agreed with you, and recorded here because it changes how these milestones get
+delivered:
+
+* **We go step by step together.** No multi-milestone sprints; each piece gets
+  reviewed before the next starts.
+* **You run the code.** I write it and may run *small tests of new code* — a
+  couple of frames, a shape check, a timing probe — but anything that is a real
+  experiment or a long run is delivered as a script for you to execute.
+  `scripts/lambda_ramp.py` (§12.5) is the first instance.
+* **No long background jobs.** Everything I start should finish inside a short
+  test, or be handed over.
+* The MAE/SOM side stays yours to implement, per the other session.
+
+## 12.10 Dependencies
 
 Nothing in §12.6 needs `torch`. The MAE/SOM side would need `torch`, plus
 `minisom`/`somoclu` or a hand-rolled SOM, in an optional `[represent]`

@@ -95,6 +95,8 @@ OrderParams compute_impl(const Config& c, const double* x, const double* y,
   accr /= n;
   acci /= n;
   op.psi6 = std::sqrt(accr * accr + acci * acci);
+  op.psi6_re = accr;
+  op.psi6_im = acci;
 
   // Per-particle magnitude |psi6_i|, scattered back to the caller's indexing.
   // Note this is taken BEFORE the global average: |<psi6_i>| (what op.psi6

@@ -13,6 +13,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -185,6 +186,11 @@ class VecSimulator {
       d["c6"] = op.c6;
       d["rg"] = op.rg;
       d["rc"] = op.rc;
+      d["psi6_re"] = op.psi6_re;
+      d["psi6_im"] = op.psi6_im;
+      // Lattice orientation in [0, 60) degrees; psi6 is 6-fold.
+      d["psi6_phase"] = std::fmod(
+          std::atan2(op.psi6_im, op.psi6_re) * 180.0 / M_PI / 6.0 + 60.0, 60.0);
       out.push_back(std::move(d));
     }
     return out;
@@ -283,7 +289,9 @@ PYBIND11_MODULE(_bd_csa, m) {
       .def_readonly("psi6", &OrderParams::psi6)
       .def_readonly("c6", &OrderParams::c6)
       .def_readonly("rg", &OrderParams::rg)
-      .def_readonly("rc", &OrderParams::rc);
+      .def_readonly("rc", &OrderParams::rc)
+      .def_readonly("psi6_re", &OrderParams::psi6_re)
+      .def_readonly("psi6_im", &OrderParams::psi6_im);
 
   py::class_<VecSimulator>(m, "Simulator", R"doc(
 Batched Brownian-dynamics simulator.
