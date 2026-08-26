@@ -142,6 +142,57 @@ def rotate_about_centroid(pos: np.ndarray, angle_deg: float) -> np.ndarray:
     return (pos - c) @ R.T + c
 
 
+def load_start_pool(path: str, n: int, rg_range=(22000.0, 26500.0),
+                    max_psi6: float = 0.15, rng_seed: int = 0):
+    """Draw `n` DISTINCT starting configurations from a ramp/trajectory file.
+
+    Rotating one configuration n ways decorrelates lattice orientation but not
+    the particle arrangement, so seeds remain correlated for everything except
+    the orientation test. Drawing genuinely different configurations removes
+    that -- it was listed as a limitation in 13-lambda-ramp-results.md §13.5.
+
+    Candidates are filtered to be:
+      * inside the mobility table (R_g < 26500 nm) so no point runs on clamped,
+        extrapolated mobility, which the first ramp did for its first 10 points;
+      * still disordered (psi6 < max_psi6) so an up-ramp actually watches
+        ordering happen rather than starting halfway through it;
+      * above rg_range[0], i.e. not already compact.
+
+    Returns (positions (n, np, 2) in nm, list of human-readable provenance).
+    """
+    import h5py
+    with h5py.File(path, "r") as f:
+        if "positions" not in f:
+            raise SystemExit(f"{path}: no positions dataset")
+        pos = f["positions"][...]
+        psi6 = f["psi6"][...]
+        rg = f["rg"][...]
+        lam = f["lam"][...] if "lam" in f else None
+        if psi6.ndim == 3:                       # (seeds, points, samples)
+            psi6, rg = psi6[..., -1], rg[..., -1]
+        if pos.ndim == 3:                        # a plain Trajectory: (T, np, 2)
+            pos, psi6, rg = pos[None], psi6[None], rg[None]
+
+    ok = (rg > rg_range[0]) & (rg < rg_range[1]) & (psi6 < max_psi6)
+    si, pi = np.where(ok)
+    if len(si) == 0:
+        raise SystemExit(
+            f"{path}: no configuration with {rg_range[0]} < R_g < {rg_range[1]} "
+            f"and psi6 < {max_psi6}. Loosen --pool-max-psi6 or --pool-rg-range.")
+
+    rng = np.random.default_rng(rng_seed)
+    idx = rng.choice(len(si), size=n, replace=len(si) < n)
+    out = np.stack([pos[si[i], pi[i]] for i in idx])
+    prov = [f"seed{si[i]} point{pi[i]}"
+            + (f" (lam={lam[pi[i]]:.3f})" if lam is not None else "")
+            + f" psi6={psi6[si[i], pi[i]]:.3f} R_g={rg[si[i], pi[i]]:.0f}"
+            for i in idx]
+    if len(si) < n:
+        print(f"  WARNING: only {len(si)} distinct candidates for {n} seeds; "
+              "some are reused (they still get different random rotations)")
+    return out, prov
+
+
 def build_schedule(lam_min: float, lam_max: float, points: int, down: bool,
                    spacing: str = "log",
                    include: tuple = ()) -> tuple[np.ndarray, np.ndarray]:
@@ -237,7 +288,8 @@ def run_ramp(cfg, table, x0, lam_sched, seed, steps_per_point, device,
     return out
 
 
-def save(path, lam_sched, branch, seeds, results, cfg, args, init_angles=None):
+def save(path, lam_sched, branch, seeds, results, cfg, args,
+         init_angles=None, provenance=None):
     import h5py
 
     parent = os.path.dirname(os.path.abspath(path))
@@ -257,6 +309,8 @@ def save(path, lam_sched, branch, seeds, results, cfg, args, init_angles=None):
             "steps_per_sample": int(results[0]["steps_per_sample"]),
             "equilibrate": args.equilibrate, "device": args.device,
             "rotate_init": bool(args.rotate_init),
+            "start_pool": args.start_pool,
+            "start_provenance": provenance,
             "dt_ms": cfg.dt,
             "hold_time_s": args.steps_per_point * cfg.dt / 1e3,
         })
@@ -641,6 +695,15 @@ def main() -> int:
                    help="do NOT randomise each seed's initial lattice "
                         "orientation. Off by default because sharing one "
                         "orientation across seeds invalidates the §12.4 test")
+    p.add_argument("--start-pool", metavar="PATH",
+                   help="draw a DIFFERENT starting configuration per seed from "
+                        "this ramp/trajectory file, instead of rotating one")
+    p.add_argument("--pool-rg-range", type=float, nargs=2, default=(22000., 26500.),
+                   metavar=("LO", "HI"),
+                   help="candidate R_g window (nm); the upper bound keeps every "
+                        "start inside the mobility table")
+    p.add_argument("--pool-max-psi6", type=float, default=0.15,
+                   help="candidates must be at least this disordered")
     p.add_argument("--samples-per-point", type=int, default=10,
                    help="state readouts within each hold. Costs no extra "
                         "simulation and gives a direct equilibration check")
@@ -667,7 +730,17 @@ def main() -> int:
     cfg = bd_csa.Config.from_run_txt(args.run)
     if args.device == "cuda" and not bd_csa.cuda_available():
         raise SystemExit("--device cuda requested but no CUDA device found")
-    x0 = load_configuration(args.start, cfg.np, cfg.a)
+    pool = prov = None
+    if args.start_pool:
+        pool, prov = load_start_pool(args.start_pool, args.seeds,
+                                     tuple(args.pool_rg_range),
+                                     args.pool_max_psi6, args.seed_base)
+        x0 = pool[0]
+        print(f"start pool {args.start_pool}: {args.seeds} distinct "
+              f"configurations with R_g in {tuple(args.pool_rg_range)} nm "
+              f"and psi6 < {args.pool_max_psi6}")
+    else:
+        x0 = load_configuration(args.start, cfg.np, cfg.a)
 
     forced = tuple(args.include_lam) + (LITERATURE_LAMBDAS if args.literature else ())
     lam_sched, branch = build_schedule(args.lam_min, args.lam_max, args.points,
@@ -693,19 +766,22 @@ def main() -> int:
     init_angles = (np.zeros(len(seeds)) if not args.rotate_init
                    else rng.uniform(0.0, 360.0, len(seeds)))
     for k, s in enumerate(seeds):
+        start_k = x0 if pool is None else pool[k]
         print(f"  seed {s} ({k+1}/{len(seeds)})  "
-              f"initial rotation {init_angles[k]:6.1f} deg")
+              f"rotation {init_angles[k]:6.1f} deg"
+              + ("" if pool is None else f"  from {prov[k]}"))
         results.append(run_ramp(cfg, args.table,
-                                rotate_about_centroid(x0, init_angles[k]),
+                                rotate_about_centroid(start_k, init_angles[k]),
                                 lam_sched, s, args.steps_per_point,
                                 args.device, args.equilibrate,
                                 args.samples_per_point))
         # Write after every seed. A crash in seed 4 should not discard seeds
         # 0-3; the first real run lost a completed seed to a late exception.
         save(args.out, lam_sched, branch, seeds[:len(results)], results, cfg,
-             args, init_angles=init_angles[:len(results)])
+             args, init_angles=init_angles[:len(results)],
+             provenance=(prov[:len(results)] if prov else None))
     save(args.out, lam_sched, branch, seeds, results, cfg, args,
-         init_angles=init_angles)
+         init_angles=init_angles, provenance=prov)
     print(f"\nwrote {args.out} in {time.time()-t0:.1f} s "
           f"({os.path.getsize(args.out)/1e6:.2f} MB)\n")
     analyze(args.out, plot=args.plot)
@@ -723,7 +799,7 @@ def main() -> int:
                             args.equilibrate, args.samples_per_point)
                    for k, s in enumerate(seeds)]
         save(slow, lam_sched, branch, seeds, results, cfg, args,
-             init_angles=init_angles)
+             init_angles=init_angles, provenance=prov)
         analyze(slow, plot=args.plot)
         print("\nCompare the hysteresis gaps between the two files: if the slow "
               "run's gap is materially smaller, the hysteresis is kinetic.")

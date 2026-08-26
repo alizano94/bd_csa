@@ -1,7 +1,18 @@
 # 13. λ-Ramp Experiment — Results
 
-**Run date:** 2026-08-24 · **Script:** `scripts/lambda_ramp.py` ·
-**Data:** `runs/ramp.h5` (20 s holds), `runs/ramp.slow.h5` (40 s holds)
+**Script:** `scripts/lambda_ramp.py`
+
+| run | date | data | starts |
+|---|---|---|---|
+| **A** exploratory | 2026-08-24 | `runs/ramp.h5`, `runs/ramp.slow.h5` (40 s rate control) | 5 seeds, one dispersed configuration, rotated |
+| **B** definitive | 2026-08-25 | `runs/ramp20.h5` | 20 seeds, **distinct** configurations from a filtered pool |
+
+**Read §13.5 first if you want the conclusions.** Run A's starting state was
+outside the mobility table's range and far from equilibrium, which inflated two
+of its findings; run B fixes that and **overturns run A's conclusion about
+R_g**. Run A is kept because its rate control (the 40 s repeat) is the only
+evidence on rate dependence, and because the way its artifacts appeared is
+instructive.
 
 ## 13.1 Motivation
 
@@ -22,7 +33,7 @@ nuisance?** The quadrupole pins the lab frame, so the crystal's orientation
 relative to the electrode axes may be real physics rather than a symmetry to
 canonicalise away.
 
-## 13.2 Procedure
+## 13.2 Procedure (run A; run B differs only as noted in §13.5)
 
 λ was swept **up and back down** through the physically meaningful range,
 holding at each value to let the system relax, across independent seeds.
@@ -165,7 +176,7 @@ temporally correlated and 5 seeds is thin.
 answer changes §12.4: if orientation is pinned by the field it is signal and must
 not be canonicalised or augmented away.
 
-## 13.4 Conclusions
+## 13.4 Conclusions (run A — see §13.6 for the revised set)
 
 1. **The state space is not a smooth continuum.** ψ₆ and C₆ show genuine
    hysteresis loops with a 2.6–4.3× separation in λ between ordering and melting,
@@ -176,11 +187,12 @@ not be canonicalised or augmented away.
 3. **Part of the hysteresis is kinetic and the loops are not converged.** All
    gaps shrank with 2× holds. The experiment establishes *that* loops exist at
    accessible sweep rates, not their infinitely-slow limit.
-4. **R_g's apparent loop is not evidence of bistability** — it is initial-condition
-   memory plus the driven-vs-diffusive asymmetry, on top of clamped mobility.
+4. ~~**R_g's apparent loop is not evidence of bistability**~~ — **SUPERSEDED by §13.6.4.** True of run A specifically; run B, started inside the mobility
+   table, shows a genuine closed loop.
 5. **RC is unusable in the dispersed regime** — it saturates at 0 above
    R_g = 26,500 nm by construction.
-6. **Orientation is unresolved** and needs more seeds.
+6. ~~**Orientation is unresolved**~~ — **RESOLVED in §13.6.6:** it is a nuisance
+   variable (R = 0.180 vs 0.224 by chance, 20 seeds).
 
 ### What this means for the representation work
 
@@ -192,16 +204,170 @@ not be canonicalised or augmented away.
   (ψ₆, C₆).
 * Do not use RC as an evaluation target outside its calibration range.
 
-## 13.5 Limitations and what to run next
+## 13.5 Run B — 20 seeds, pooled starting configurations
 
-| limitation | fix |
+### What changed
+
+Two of run A's limitations were addressed at once:
+
+* **Starting states inside the mobility table.** Configurations were drawn from
+  run A's own saved positions, filtered to R_g ∈ [22,000, 26,500] nm and
+  ψ₆ < 0.15 — dispersed enough to watch ordering happen, but inside the
+  calibrated range. Run A started at R_g = 31,386 nm, above the top of the
+  table, so its first 10 points ran on clamped, extrapolated mobility.
+* **Genuinely distinct starts.** Each of the 20 seeds got a *different*
+  configuration (69 candidates qualified), not 20 rotations of one. Provenance
+  for every seed is recorded in the file.
+
+Everything else was identical: λ = 0.2 → 20 → 0.2, log-spaced, 44 points per
+branch, 20 s holds, 10 intra-hold samples, random initial rotations.
+350 M env-steps, ~3.4 h on CUDA.
+
+### Equilibration — now clean
+
+| still drifting | run A (5 seeds) | **run B (20 seeds)** |
+|---|---|---|
+| ψ₆ | 0.0% | 0.0% |
+| C₆ | 11.5% | **2.3%** |
+| R_g | **32.2%** | **0.0%** |
+
+R_g went from the worst-behaved observable to fully settled. This is the
+starting state, not the seed count: run A was relaxing out of a far-from-
+equilibrium, out-of-table configuration for the whole up-ramp.
+
+### Correction: R_g **does** show a genuine hysteresis loop
+
+Run A concluded that R_g's gap was "not evidence of bistability" — initial-
+condition memory plus the driven-vs-diffusive asymmetry. **That conclusion was
+right about run A and wrong as a general statement.**
+
+| | run A | run B |
+|---|---|---|
+| up-branch start | 31,074 nm | 24,567 nm |
+| down-branch end | 24,059 nm | 24,077 nm |
+| **branches meet at low λ?** | **no** (7,015 nm apart) | **yes** (490 nm apart) |
+| max gap | 7,014 nm | **2,056 nm** |
+| seed spread | 113 nm | 229 nm |
+| gap / spread | 62× | **9×** |
+| points above the mobility table | 10/87 | **0/87** |
+
+In run B the two branches **close at both ends** — meeting near 24,000 nm at low
+λ and 19,300 nm at high λ — and separate in between. That is the topology of a
+real hysteresis loop, and it is what run A could not show because its up-branch
+never returned to its starting point.
+
+So R_g hysteresis is real, but run A overstated it by ~3.4×: roughly 70% of that
+7,014 nm gap was initial-condition memory, ~30% is physical.
+
+### Correction: RC is fine once R_g stays in range
+
+Run A found RC pinned at exactly 0 for λ ≲ 0.5 and attributed it to the formula
+clamping above RgUB = 26,500 nm. Run B confirms the diagnosis by removing the
+cause: **0 of 44 up-branch points are pinned**, against 9 of 44 in run A, and RC
+is informative across the whole sweep.
+
+RC is not broken — it is calibrated for compact clusters and must not be used
+above R_g = 26,500 nm.
+
+### Resolved: lattice orientation is a **nuisance** variable
+
+This was the primary reason for 20 seeds, and it is now settled.
+
+| | run A (5 seeds) | run B (20 seeds) |
+|---|---|---|
+| concentration R | 0.633 | **0.180** |
+| chance level (1/√n) | 0.447 | **0.224** |
+| R / chance | 1.42 (borderline) | **0.80** |
+
+R falls **below** the chance level, which is exactly what a uniform distribution
+does. Final lattice angles across the 20 seeds span the full period —
+5.6°, 7.1°, 9.5°, 11.1°, … 49.9°, 50.5°, 51.0° — with no clustering near the
+0°/30° that the electrode axes map to. Run A's apparent concentration in 20–40°
+was a small-sample artifact.
+
+**The quadrupole does not pin the hexatic director.** For
+[§12.4](12-image-state-representation.md) this means orientation carries no
+state information and should not be allowed to consume encoder capacity.
+
+The practical recommendation from §12.4 is unchanged and now has evidence behind
+it: since orientation is uniformly distributed *in the data*, a large training
+set automatically contains all orientations, and the encoder can learn
+approximate invariance without any explicit canonicalisation — which is
+fortunate, because rotation canonicalisation remains numerically unusable
+(clusters are 1–3% anisotropic) and continuous rotation is still not an exact
+symmetry.
+
+### Hysteresis in ψ₆ and C₆ — confirmed, slightly narrower
+
+| | run A | run B |
+|---|---|---|
+| ψ₆ = 0.5 crossing, up | λ = 3.61 | λ = 3.57 |
+| ψ₆ = 0.5 crossing, down | λ = 0.835 | λ = 0.928 |
+| **loop width** | **4.32×** | **3.85×** |
+| ψ₆ max gap / seed spread | 0.556 / 0.112 = 5.0× | 0.522 / 0.125 = **4.2×** |
+| C₆ max gap / seed spread | 2.015 / 0.098 = 21× | 1.621 / 0.136 = **12×** |
+
+The loop narrowed modestly with better starts but remains far outside noise
+-- 4x the seed spread for psi6, 12x for C6. The up-branch ψ₆ shows a clear plateau at
+≈0.05 until λ ≈ 2 followed by a rapid rise — the signature of a nucleation
+barrier.
+
+### A small feature worth noting
+
+On the up-ramp, R_g *rises* slightly before it falls — 24,567 → 24,880 nm over
+λ = 0.2 → 0.3 (+2,112 nm/decade) — before the field takes hold and compaction
+begins. At the lowest λ the trap is too weak to hold the cluster against
+diffusion. It is small but reproducible across 20 seeds and visible in the
+figure.
+
+## 13.6 Revised conclusions
+
+Superseding §13.4 where they conflict:
+
+1. **The state space is not a smooth continuum.** ψ₆ and C₆ show hysteresis
+   loops with a 3.9× separation in λ between ordering and melting, at 4–12× the
+   seed spread. Nucleation-limited ordering transition. *(unchanged)*
+2. **Use a growing SOM, not a fixed grid.** *(unchanged, and now stronger —
+   three of four order parameters show closed loops)*
+3. **Part of the hysteresis is kinetic.** Doubling holds narrowed every loop in
+   run A. Run B did not repeat the rate control, so the infinitely-slow limit
+   remains unmeasured. *(unchanged)*
+4. **R_g shows a genuine loop.** ✱ **Corrects §13.4 conclusion 4.** With a
+   starting state inside the mobility table the branches close at both ends and
+   a 2,056 nm gap survives at 9× the seed spread.
+5. **RC is usable inside its calibration range.** ✱ **Refines §13.4 conclusion
+   5.** It is blind above R_g = 26,500 nm by construction, not broken.
+6. **Lattice orientation is a nuisance variable.** ✱ **Resolves §13.4
+   conclusion 6.** R = 0.180 against 0.224 by chance across 20 seeds.
+
+### What this means for the representation work
+
+* **Growing SOM**, per conclusion 2.
+* **Matched-λ opposite-branch pairs** are the hard-case evaluation set for
+  [§12.7](12-image-state-representation.md): same control input, different
+  structure — exactly the discrimination a learned representation must
+  demonstrate over (ψ₆, C₆). Run B's data contains these at every λ between
+  0.3 and 10.
+* **Do not spend model capacity on orientation** (conclusion 6), and do not use
+  RC outside R_g < 26,500 nm (conclusion 5).
+* **Dataset generation should start from pooled, in-range configurations**, as
+  run B did — the R0/R1 generator in §12.6 should reuse `--start-pool`'s
+  filtering rather than a single seed configuration.
+
+## 13.7 Limitations and what to run next
+
+| limitation | status |
 |---|---|
-| Holds too short for R_g; loops not converged | third rate point at 80–160 s holds, then extrapolate loop width vs rate |
-| Orientation inconclusive (5 seeds) | 15–20 seeds; only the final λ point per seed is needed, so this is cheap |
-| Up-branch start far from equilibrium and outside the mobility table | start from a *moderately* dispersed state inside R_g < 26,500 nm, or equilibrate at λ_min for longer |
-| Low-λ region coarsely sampled where the melting transition sits | more points below λ = 1 — the down-branch crossing is at λ ≈ 0.84–0.99 |
-| One initial configuration, rotated | genuinely independent initial configurations |
+| ~~Orientation inconclusive (5 seeds)~~ | **done** — run B, 20 seeds |
+| ~~Up-branch start outside the mobility table~~ | **done** — `--start-pool` filters to R_g < 26,500 nm |
+| ~~One initial configuration, rotated~~ | **done** — 20 distinct pooled starts |
+| ~~Holds too short for R_g~~ | **done** — 0% drift in run B |
+| **Loops not converged in sweep rate** | **open** — run B has no rate control; only run A's 20 s/40 s pair exists |
+| Low-λ region coarsely sampled where melting occurs | open — down-branch crossing sits at λ ≈ 0.93 |
+| Starts inherit run A's history | open — not an equilibrium ensemble, so seed spread is not a clean physical error bar |
 
-The single highest-value follow-up is the **third rate point**: it converts
-"loops exist at these rates" into a defensible statement about whether a
-thermodynamic loop survives.
+The single highest-value follow-up remains the **third rate point** — run B's
+configuration at 80 s holds. It is the one thing standing between "loops exist
+at accessible sweep rates" and a defensible claim about a thermodynamic loop.
+At 20 seeds that is ~14 h; at 8 seeds, ~5.5 h, which is enough to measure loop
+width since that statistic converged well before 20 seeds (4.32× → 3.85×).
